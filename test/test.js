@@ -16,6 +16,7 @@ describe('csurf', function () {
   it('should work in req.body', function (done) {
     var server = createServer()
 
+    // See https://github.com/ladjs/supertest
     request(server)
       .get('/')
       .expect(200, function (err, res) {
@@ -25,7 +26,7 @@ describe('csurf', function () {
         request(server)
           .post('/')
           .set('Cookie', cookies(res))
-          .send('_csrf=' + encodeURIComponent(token))
+          .send('_csrf=' + encodeURIComponent(token)) // req.body._csrf = csrf token
           .expect(200, done)
       })
   })
@@ -40,7 +41,7 @@ describe('csurf', function () {
         var token = res.text
 
         request(server)
-          .post('/?_csrf=' + encodeURIComponent(token))
+          .post('/?_csrf=' + encodeURIComponent(token)) // req.query._csrf = csrf token
           .set('Cookie', cookies(res))
           .expect(200, done)
       })
@@ -58,7 +59,7 @@ describe('csurf', function () {
         request(server)
           .post('/')
           .set('Cookie', cookies(res))
-          .set('csrf-token', token)
+          .set('csrf-token', token) // req.headers['csrf-token'] = csrf token
           .expect(200, done)
       })
   })
@@ -75,7 +76,7 @@ describe('csurf', function () {
         request(server)
           .post('/')
           .set('Cookie', cookies(res))
-          .set('xsrf-token', token)
+          .set('xsrf-token', token) // req.headers['xsrf-token'] = csrf token
           .expect(200, done)
       })
   })
@@ -92,7 +93,7 @@ describe('csurf', function () {
         request(server)
           .post('/')
           .set('Cookie', cookies(res))
-          .set('x-csrf-token', token)
+          .set('x-csrf-token', token) // req.headers['x-csrf-token'] = csrf token
           .expect(200, done)
       })
   })
@@ -109,7 +110,7 @@ describe('csurf', function () {
         request(server)
           .post('/')
           .set('Cookie', cookies(res))
-          .set('x-xsrf-token', token)
+          .set('x-xsrf-token', token) // req.headers['x-xsrf-token'] = csrf token
           .expect(200, done)
       })
   })
@@ -125,7 +126,7 @@ describe('csurf', function () {
           .post('/')
           .set('Cookie', cookies(res))
           .set('X-CSRF-Token', '42')
-          .expect(403, done)
+          .expect(403, done) // 403是csurf()中间件在验证csrf token失败时返回的状态码
       })
   })
 
@@ -153,6 +154,7 @@ describe('csurf', function () {
     })
 
     app.use(function (err, req, res, next) {
+      // 'EBADCSRFTOKEN'是csurf()中间件在验证csrf token失败时返回的code
       if (err.code !== 'EBADCSRFTOKEN') return next(err)
       res.statusCode = 403
       res.end('session has expired or form tampered with')
@@ -175,11 +177,14 @@ describe('csurf', function () {
 
     app.use(csurf())
 
+    // 没有通过cookie-parser或者cookie-session来保存csrf token的secret时
     request(app)
       .get('/')
       .expect(500, /misconfigured csrf/, done)
   })
 
+  // 上面的测试用例调用createServer()时，没有传入opts，所以缺省是通过cookie-session来保存csrf token的secret
+  // 下面的测试用例传入了opts.cookie，所以是通过cookie-parser来保存csrf token的secret
   describe('with "cookie" option', function () {
     describe('when true', function () {
       it('should store secret in "_csrf" cookie', function (done) {
@@ -189,10 +194,12 @@ describe('csurf', function () {
           .get('/')
           .expect(200, function (err, res) {
             if (err) return done(err)
+            // '_csrf'是getCookieOptions()缺省所使用的cookie name
             var data = cookie(res, '_csrf')
             var token = res.text
 
             assert.ok(Boolean(data))
+            // data的格式是: '_csrf=csrf token; path=/'
             assert.ok(/; *path=\/(?:;|$)/i.test(data))
 
             request(server)
@@ -289,6 +296,8 @@ describe('csurf', function () {
               var token = res.text
 
               assert.ok(Boolean(data))
+              // data的格式是: '_csrf=s%3A2vTcscla_jdIVzO0--Q7p50-.G62O5BkLVs3s3EOjlhwH4brF6nOWKhPSI80iM0MG%2FkM; Path=/'
+              // cookie签名是在setSecret()函数中实现的
               assert.ok(/^_csrf=s%3A/i.test(data))
 
               request(server)
@@ -312,6 +321,7 @@ describe('csurf', function () {
         it('should error when cookieParser is missing secret', function (done) {
           var app = connect()
 
+          // 调用csurf()传入的options.cookie.signed为true，但是调用cookieParser()时没有传入secret，导致verifyConfiguration从req.secret取不到值
           app.use(cookieParser())
           app.use(csurf({ cookie: { signed: true } }))
 
@@ -342,7 +352,7 @@ describe('csurf', function () {
             .expect(200, function (err, res) {
               if (err) return done(err)
               request(server)
-                .put('/')
+                .put('/') // put没有在ignoreMethods中，所以需要csrf token
                 .set('Cookie', cookie)
                 .expect(403, done)
             })
@@ -350,6 +360,7 @@ describe('csurf', function () {
     })
   })
 
+  // 下面的测试用例传入opts.sessionKey，所以是通过session来保存csrf token的secret
   describe('with "sessionKey" option', function () {
     it('should use the specified sessionKey', function (done) {
       var app = connect()
@@ -401,6 +412,7 @@ describe('csurf', function () {
       app.use(session({ keys: ['a', 'b'] }))
       app.use(csurf())
       app.use(function (req, res) {
+        // See https://github.com/expressjs/cookie-session?tab=readme-ov-file#destroying-a-session
         req.session = null
         res.setHeader('x-run', 'true')
         res.end(req.csrfToken())
@@ -426,6 +438,7 @@ describe('csurf', function () {
       })
       app.use('/new', function (req, res, next) {
         // regenerate session
+        // req.csrfToken()这种情况下会重新生成一个csrf token
         req.session = { hit: 1 }
         next()
       })
@@ -477,14 +490,25 @@ function cookie (res, name) {
 }
 
 function cookies (res) {
+  // res.headers['set-cookie'】返回一个数组，每个元素是一个cookie。
+  // 假如 res.headers['set-cookie'】是:
+  // [
+  // 'express:sess=eyJjc3JmU2VjcmV0IjoiMkJJeER5NllWVEtwRUFyYmZpMjRXa0J0In0=; path=/; httponly',
+  // 'express:sess.sig=4P-6WyiyKzMk7SkOlLAiD4n9Dx4; path=/; httponly'
+  // ]
+  // 则返回:
+  // 'express:sess=eyJjc3JmU2VjcmV0IjoiMkJJeER5NllWVEtwRUFyYmZpMjRXa0J0In0=;express:sess.sig=4P-6WyiyKzMk7SkOlLAiD4n9Dx4'
   return res.headers['set-cookie'].map(function (cookies) {
     return cookies.split(';')[0]
   }).join(';')
 }
 
+// 这个opts会原样传给csurf()
 function createServer (opts) {
+  // See https://github.com/senchalabs/connect
   var app = connect()
 
+  // 使用中间件cookie-parser还是cookie-session来保存csrf token的secret, 取决于opts.cookie
   if (!opts || (opts && !opts.cookie)) {
     app.use(session({ keys: ['a', 'b'] }))
   } else if (opts && opts.cookie) {
@@ -492,6 +516,7 @@ function createServer (opts) {
   }
 
   app.use(function (req, res, next) {
+    // 继续出req中的query string并复制给req.query
     var index = req.url.indexOf('?') + 1
 
     if (index) {
@@ -500,10 +525,12 @@ function createServer (opts) {
 
     next()
   })
+
   app.use(bodyParser.urlencoded({ extended: false }))
   app.use(csurf(opts))
 
   app.use(function (req, res) {
+    // 把csrf token作为response body直接返回
     res.end(req.csrfToken() || 'none')
   })
 
